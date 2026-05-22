@@ -24,16 +24,14 @@ The frontmatter schema uses flat, properly-typed YAML so it works natively with 
 ## Install
 
 ```sh
-npm install -g @sistrall/pinmark
+npm install -g pinmark
 ```
 
 Or run on-demand:
 
 ```sh
-npx @sistrall/pinmark sync
+npx pinmark sync
 ```
-
-The CLI binary is named `pinmark` (unscoped), so after a global install you invoke it as `pinmark sync` regardless of the package's npm scope. Forks can republish under a different scope (e.g. `@yourname/pinmark`) and the binary name will still be `pinmark`.
 
 ## Configure
 

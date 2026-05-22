@@ -1,8 +1,5 @@
 {
-  "name": "@sistrall/pinmark",
-  "publishConfig": {
-    "access": "public"
-  },
+  "name": "pinmark",
   "version": "0.1.0",
   "description": "Mirror Pinboard bookmarks into an Obsidian vault, enriched with extracted page content.",
   "type": "module",
