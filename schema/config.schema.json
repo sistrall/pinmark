@@ -1,0 +1,85 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": [],
+  "properties": {
+    "vault": {
+      "type": "string"
+    },
+    "fetch": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "concurrency": {
+          "type": "number"
+        },
+        "perHostConcurrency": {
+          "type": "number"
+        },
+        "timeoutMs": {
+          "type": "number"
+        },
+        "userAgent": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "extraction": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "minWordCount": {
+          "type": "number"
+        },
+        "headlessAllowlist": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "retry": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "maxAttempts": {
+          "type": "number"
+        },
+        "initialDelayMs": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": false
+    },
+    "screenshot": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "viewportWidth": {
+          "type": "number"
+        },
+        "format": {
+          "type": "string",
+          "enum": ["png", "jpeg"]
+        },
+        "jpegQuality": {
+          "type": "number"
+        },
+        "skipDomains": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

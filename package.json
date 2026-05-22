@@ -1,0 +1,80 @@
+{
+  "name": "@sistrall/pinmark",
+  "publishConfig": {
+    "access": "public"
+  },
+  "version": "0.1.0",
+  "description": "Mirror Pinboard bookmarks into an Obsidian vault, enriched with extracted page content.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "pinmark": "./dist/main.mjs"
+  },
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist",
+    "schema",
+    "examples",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "dev": "tsx src/main.ts",
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "schema": "tsx scripts/generate-schema.ts",
+    "prepublishOnly": "npm run typecheck && npm run lint && npm run test && npm run build"
+  },
+  "keywords": [
+    "pinboard",
+    "obsidian",
+    "bookmarks",
+    "cli"
+  ],
+  "license": "MIT",
+  "author": "sistrall",
+  "homepage": "https://github.com/sistrall/pinmark#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sistrall/pinmark.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sistrall/pinmark/issues"
+  },
+  "dependencies": {
+    "@effect/cli": "^0.75.1",
+    "@effect/platform": "^0.96.1",
+    "@effect/platform-node": "^0.106.0",
+    "cosmiconfig": "^9.0.1",
+    "defuddle": "^0.18.1",
+    "effect": "^3.21.2",
+    "gray-matter": "^4.0.3",
+    "jsdom": "^29.1.1",
+    "playwright-core": "^1.60.0",
+    "turndown": "^7.2.4"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.15",
+    "@effect/vitest": "^0.29.0",
+    "@types/jsdom": "^28.0.3",
+    "@types/node": "^25.9.1",
+    "@types/turndown": "^5.0.6",
+    "tsdown": "^0.21.10",
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3",
+    "vitest": "^3.2.4"
+  }
+}

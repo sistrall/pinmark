@@ -1,0 +1,18 @@
+{
+  "$schema": "../schema/config.schema.json",
+  "vault": ".",
+  "fetch": {
+    "concurrency": 4,
+    "perHostConcurrency": 1,
+    "timeoutMs": 30000,
+    "userAgent": "pinmark/0.1 (+https://github.com/youruser/pinmark)"
+  },
+  "extraction": {
+    "minWordCount": 100,
+    "headlessAllowlist": ["twitter.com", "x.com", "medium.com", "linear.app"]
+  },
+  "retry": {
+    "maxAttempts": 5,
+    "initialDelayMs": 30000
+  }
+}
