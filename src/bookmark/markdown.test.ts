@@ -61,4 +61,13 @@ describe("composeBookmarkFile / parseBookmarkFile", () => {
     const result = await Effect.runPromiseExit(parseBookmarkFile("plain markdown\n"));
     expect(result._tag).toBe("Failure");
   });
+
+  // gray-matter caches by content and returns cache hits without the
+  // non-enumerable `matter` field, so a second identical note used to crash.
+  it("parses the same content twice", async () => {
+    const composed = await Effect.runPromise(composeBookmarkFile(sampleFrontmatter, "Same."));
+    const first = await Effect.runPromise(parseBookmarkFile(composed));
+    const second = await Effect.runPromise(parseBookmarkFile(composed));
+    expect(second).toEqual(first);
+  });
 });

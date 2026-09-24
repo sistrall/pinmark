@@ -3,10 +3,12 @@ import { reconcile } from "./reconcile.js";
 import {
   classify,
   classifyKind,
+  expectedPath,
   from,
   isDrifted,
   isFailing,
   isMissingScreenshot,
+  needsMove,
 } from "./state.js";
 import { sync } from "./sync.js";
 
@@ -45,6 +47,8 @@ export const Pair = {
   isFailing,
   isMissingScreenshot,
   isDrifted,
+  expectedPath,
+  needsMove,
 
   // Operations
   reconcile,

@@ -65,8 +65,25 @@ export const ScreenshotConfig = Schema.Struct({
   }),
 });
 
+// Folder pattern made of "/"-separated segments, each built from letters, digits,
+// "-", "_" and the tokens {yyyy}, {mm}, {dd}. Rejects anything that could escape
+// the vault ("..", absolute paths) or produce empty segments.
+const LAYOUT_SEGMENT = /^(?:[A-Za-z0-9_-]|\{yyyy\}|\{mm\}|\{dd\})+$/;
+export const Layout = Schema.String.pipe(
+  Schema.filter(
+    (s) =>
+      s === "" ||
+      s.split("/").every((segment) => LAYOUT_SEGMENT.test(segment)) ||
+      `Invalid layout "${s}": use "/"-separated segments of letters, digits, "-", "_", {yyyy}, {mm} and {dd}`,
+  ),
+);
+
 export const PinmarkConfig = Schema.Struct({
   vault: Schema.optionalWith(Schema.String, { default: () => "." }),
+  // Where notes go inside the vault, by the date the bookmark was saved. "" keeps
+  // every note in the vault root; "{yyyy}/{mm}" gives e.g. 2024/03/note.md.
+  // Changing it moves existing notes on the next sync.
+  layout: Schema.optionalWith(Layout, { default: () => "" }),
   fetch: Schema.optionalWith(FetchConfig, {
     default: () => FetchConfig.make({}),
   }),

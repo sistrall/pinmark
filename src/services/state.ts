@@ -4,6 +4,9 @@ import { StateError } from "../errors.js";
 
 const StateFile = Schema.Struct({
   lastPinboardUpdate: Schema.optional(Schema.Date),
+  // Layout the vault was last synced with. A different configured layout forces a
+  // full pass so existing notes get moved even when Pinboard hasn't changed.
+  layout: Schema.optional(Schema.String),
   schemaVersion: Schema.optionalWith(Schema.Number, { default: () => 1 }),
 });
 export type StateFile = typeof StateFile.Type;

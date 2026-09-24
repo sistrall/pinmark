@@ -20,7 +20,10 @@ export interface ParsedBookmarkFile {
 export const parseBookmarkFile = (content: string): Effect.Effect<ParsedBookmarkFile, VaultError> =>
   Effect.gen(function* () {
     const parsed = yield* Effect.try({
-      try: () => matter(content),
+      // Passing options bypasses gray-matter's content cache, whose hits come back
+      // without the (non-enumerable) `matter` field and which would otherwise hold
+      // every note of the vault in memory for the whole sync.
+      try: () => matter(content, {}),
       catch: (cause) => new VaultError({ message: "Failed to parse markdown frontmatter", cause }),
     });
     if (parsed.matter.length === 0) {

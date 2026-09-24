@@ -40,6 +40,7 @@ Create a `.pinmark.config.json` in the vault repo root:
 ```json
 {
   "vault": ".",
+  "layout": "{yyyy}/{mm}",
   "fetch": {
     "concurrency": 4,
     "perHostConcurrency": 1,
@@ -103,17 +104,23 @@ Required secret: `PINBOARD_API_TOKEN`.
 
 By default, the vault root is the current working directory — i.e. running `pinmark sync` inside the vault repo writes bookmark files alongside `.pinmark.config.json`. Override with `--vault <path>` / `PINMARK_VAULT` / config `vault` key.
 
+By default notes are flat, all in the vault root. Set `layout` to file them in folders by the date each bookmark was saved on Pinboard (in UTC), using the tokens `{yyyy}`, `{mm}` and `{dd}`. For example, `"layout": "{yyyy}/{mm}"` gives:
+
 ```
 ./
-  awesome-article-5d41402a.md
-  another-thing-7c8b9e10.md
+  2024/
+    03/
+      awesome-article-5d41402a.md
+      awesome-article-5d41402a.jpg   # screenshot, next to its note
+    04/
+      another-thing-7c8b9e10.md
   ...
   .pinmark/
-    state.json          # global state (last Pinboard sync timestamp)
+    state.json          # global state (last Pinboard sync timestamp, layout)
   .pinmark.config.json
 ```
 
-Markdown files are flat (no nested folders). Tag-based navigation uses Obsidian's tag pane / Bases over the frontmatter `tags` field — see [`docs/frontmatter.md`](docs/frontmatter.md) for the schema.
+Changing `layout` moves existing notes and their screenshots on the next sync, even if nothing changed on Pinboard, and removes folders left empty. Notes are matched by the URL hash at the end of their filename, so moving them by hand is also safe: pinmark finds them anywhere in the vault (dot-folders such as `.obsidian` are ignored) and puts them back where the layout says. Obsidian links resolve by note name, so they keep working after a move. Tag-based navigation uses Obsidian's tag pane / Bases over the frontmatter `tags` field — see [`docs/frontmatter.md`](docs/frontmatter.md) for the schema.
 
 ## Status
 
