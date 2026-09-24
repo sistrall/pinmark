@@ -124,7 +124,7 @@ Changing `layout` moves existing notes and their screenshots on the next sync, e
 
 ## Status
 
-Early. The current `0.0.x` releases are pre-API-stable; the frontmatter schema may evolve. Once tagged `1.0.0`, the schema and CLI contract are stable.
+Early. The current `0.x` releases are pre-API-stable; the frontmatter schema may evolve. Once tagged `1.0.0`, the schema and CLI contract are stable.
 
 ## License
 
