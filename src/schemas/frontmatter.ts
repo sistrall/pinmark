@@ -15,6 +15,8 @@ export const FetchErrorKind = Schema.Literal(
   "paywall",
   "captcha",
   "redirect_loop",
+  "unsupported_content",
+  "too_large",
 );
 export type FetchErrorKind = typeof FetchErrorKind.Type;
 

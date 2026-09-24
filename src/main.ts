@@ -4,6 +4,7 @@ import { FetchHttpClient } from "@effect/platform";
 import { NodeContext, NodeRuntime } from "@effect/platform-node";
 import { Effect, Layer, Logger } from "effect";
 import { pinmark } from "./commands/index.js";
+import { ContentPool } from "./services/content-pool.js";
 import { MarkdownConverter } from "./services/converter.js";
 import { Extractor } from "./services/extractor.js";
 import { Fetcher } from "./services/fetcher.js";
@@ -15,8 +16,10 @@ import { PINMARK_VERSION } from "./version.js";
 const ServicesLayer = Layer.mergeAll(
   PinboardClient.Default,
   Fetcher.Default,
-  Extractor.Default,
-  MarkdownConverter.Default,
+  Layer.provideMerge(
+    Layer.mergeAll(Extractor.Default, MarkdownConverter.Default),
+    ContentPool.Default,
+  ),
   Vault.Default,
   State.Default,
 );

@@ -70,10 +70,11 @@ export const buildFailedFrontmatter = (
   httpCode: number | undefined,
   attempts: number,
   maxAttempts: number,
+  permanent = false,
 ): Frontmatter => ({
   ...baseFields(post),
   ...noteFields(post),
-  pinmark_fetch_status: attempts >= maxAttempts ? "abandoned" : "failed",
+  pinmark_fetch_status: permanent || attempts >= maxAttempts ? "abandoned" : "failed",
   pinmark_fetch_method: "http",
   pinmark_fetch_attempts: attempts,
   pinmark_fetched_at: now,

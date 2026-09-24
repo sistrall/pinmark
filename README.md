@@ -44,10 +44,12 @@ Create a `.pinmark.config.json` in the vault repo root:
     "concurrency": 4,
     "perHostConcurrency": 1,
     "timeoutMs": 30000,
+    "maxBodyBytes": 5000000,
     "userAgent": "pinmark/0.1 (+https://github.com/youruser/pinmark)"
   },
   "extraction": {
     "minWordCount": 100,
+    "timeoutMs": 30000,
     "headlessAllowlist": ["twitter.com", "x.com", "medium.com"]
   },
   "retry": {
@@ -56,6 +58,8 @@ Create a `.pinmark.config.json` in the vault repo root:
   }
 }
 ```
+
+Only HTML and other `text/*` responses are extracted. Anything else (PDFs, images, video, archives) and any response larger than `fetch.maxBodyBytes` is recorded as `abandoned` straight away, with `pinmark_fetch_error_kind` set to `unsupported_content` or `too_large`, since retrying won't change the result. Extraction and markdown conversion run in worker threads and are killed after `extraction.timeoutMs`; that counts as a `timeout` failure and is retried like any other.
 
 Configuration precedence (highest wins):
 
@@ -89,7 +93,8 @@ The example:
 
 - Schedules `pinmark sync` hourly via cron
 - Queues overlapping runs (does not cancel in-progress)
-- Caches `node_modules` and Playwright's Chromium between runs
+- Caches Playwright's Chromium between runs
+- Bounds the sync with `timeout` and commits whatever was synced even if the sync step fails
 - Commits and pushes resulting changes directly to `main` with the `github-actions[bot]` identity
 
 Required secret: `PINBOARD_API_TOKEN`.
