@@ -10,7 +10,10 @@ import type { Frontmatter } from "../schemas/frontmatter.js";
 import { MarkdownConverter } from "../services/converter.js";
 import { Extractor } from "../services/extractor.js";
 import { Fetcher } from "../services/fetcher.js";
+import { PinboardClient } from "../services/pinboard.js";
+import { State } from "../services/state.js";
 import { Vault } from "../services/vault.js";
+import { sync } from "./sync.js";
 
 // ────────────────────────────────────────────────────────────────────────────────
 // Fixtures
@@ -18,6 +21,7 @@ import { Vault } from "../services/vault.js";
 
 const baseConfig: PinmarkConfig = {
   vault: "./test-vault",
+  layout: "",
   fetch: {
     concurrency: 1,
     perHostConcurrency: 1,
@@ -99,6 +103,7 @@ const defaultVault = {
   readBookmark: (_root: string, _filename: string) => Effect.succeed(Option.none<string>()),
   writeScreenshot: (_root: string, _filename: string, _bytes: Uint8Array) => Effect.void,
   deleteBookmark: (_root: string, _filename: string) => Effect.void,
+  moveFile: (_root: string, _from: string, _to: string) => Effect.void,
   listBookmarkFilenames: (_root: string) => Effect.succeed([] as string[]),
 };
 
@@ -355,5 +360,243 @@ it.effect("Untracked → Failed with kind timeout when extraction times out", ()
     expect(outcome._tag).toBe("Failed");
     expect(written.content).toContain("pinmark_fetch_status: failed");
     expect(written.content).toContain("pinmark_fetch_error_kind: timeout");
+  }),
+);
+
+// ────────────────────────────────────────────────────────────────────────────────
+// Layout — notes live in dated folders and move when they're in the wrong one.
+// ────────────────────────────────────────────────────────────────────────────────
+
+const datedConfig: PinmarkConfig = { ...baseConfig, layout: "{yyyy}/{mm}" };
+
+// Records every vault write and move so tests can assert on paths.
+const recordingVault = (content: string) => {
+  const moves: Array<[string, string]> = [];
+  const writes: string[] = [];
+  return {
+    moves,
+    writes,
+    vault: {
+      readBookmark: () => Effect.succeed(Option.some(content)),
+      moveFile: (_root: string, from: string, to: string) =>
+        Effect.sync(() => {
+          moves.push([from, to]);
+        }),
+      writeBookmark: (_root: string, filename: string) =>
+        Effect.sync(() => {
+          writes.push(filename);
+        }),
+    },
+  };
+};
+
+it.effect("Paired healthy note in the wrong folder is moved with its screenshot", () =>
+  Effect.gen(function* () {
+    const content = yield* sampleLocalMarkdown(baseFrontmatter);
+    const pair: Pair = {
+      hash: sampleRemote.hash.slice(0, 8),
+      remote: sampleRemote,
+      localFilename: "example-article-5d41402a.md",
+    };
+    const { moves, writes, vault } = recordingVault(content);
+    const outcome = yield* withStubs(Pair.reconcile(pair, datedConfig, now), { vault });
+    expect(outcome._tag).toBe("Stable");
+    // Screenshot first, so an interrupted run redoes both moves next time.
+    expect(moves).toEqual([
+      ["example-article-5d41402a.png", "2026/01/example-article-5d41402a.png"],
+      ["example-article-5d41402a.md", "2026/01/example-article-5d41402a.md"],
+    ]);
+    expect(writes).toEqual([]);
+  }),
+);
+
+it.effect("Paired note already in place → Stable, nothing moved", () =>
+  Effect.gen(function* () {
+    const content = yield* sampleLocalMarkdown(baseFrontmatter);
+    const pair: Pair = {
+      hash: sampleRemote.hash.slice(0, 8),
+      remote: sampleRemote,
+      localFilename: "2026/01/example-article-5d41402a.md",
+    };
+    const { moves, vault } = recordingVault(content);
+    const outcome = yield* withStubs(Pair.reconcile(pair, datedConfig, now), { vault });
+    expect(outcome._tag).toBe("Stable");
+    expect(moves).toEqual([]);
+  }),
+);
+
+it.effect("Paired note moves back to the root when the layout goes flat", () =>
+  Effect.gen(function* () {
+    const { screenshot: _, ...noScreenshot } = baseFrontmatter;
+    const content = yield* sampleLocalMarkdown(noScreenshot);
+    const pair: Pair = {
+      hash: sampleRemote.hash.slice(0, 8),
+      remote: sampleRemote,
+      localFilename: "2026/01/example-article-5d41402a.md",
+    };
+    const { moves, vault } = recordingVault(content);
+    const outcome = yield* withStubs(Pair.reconcile(pair, baseConfig, now), { vault });
+    expect(outcome._tag).toBe("Stable");
+    expect(moves).toEqual([["2026/01/example-article-5d41402a.md", "example-article-5d41402a.md"]]);
+  }),
+);
+
+it.effect("Paired note with broken frontmatter still moves, then is skipped", () =>
+  Effect.gen(function* () {
+    const pair: Pair = {
+      hash: sampleRemote.hash.slice(0, 8),
+      remote: sampleRemote,
+      localFilename: "example-article-5d41402a.md",
+    };
+    const { moves, vault } = recordingVault("no frontmatter here");
+    const outcome = yield* withStubs(Pair.reconcile(pair, datedConfig, now), { vault });
+    expect(outcome._tag).toBe("Skipped");
+    expect(moves).toEqual([["example-article-5d41402a.md", "2026/01/example-article-5d41402a.md"]]);
+  }),
+);
+
+it.effect("Paired drifted note in the wrong folder → moved, then refreshed at the new path", () =>
+  Effect.gen(function* () {
+    const content = yield* sampleLocalMarkdown({ ...baseFrontmatter, tags: ["old-tag"] });
+    const pair: Pair = {
+      hash: sampleRemote.hash.slice(0, 8),
+      remote: sampleRemote,
+      localFilename: "example-article-5d41402a.md",
+    };
+    const { moves, writes, vault } = recordingVault(content);
+    const outcome = yield* withStubs(Pair.reconcile(pair, datedConfig, now), { vault });
+    expect(outcome._tag).toBe("MetadataRefreshed");
+    expect(moves.map(([, to]) => to)).toContain("2026/01/example-article-5d41402a.md");
+    expect(writes).toEqual(["2026/01/example-article-5d41402a.md"]);
+  }),
+);
+
+it.effect("Untracked bookmark is created in its dated folder", () =>
+  Effect.gen(function* () {
+    const pair: Pair = { hash: sampleRemote.hash.slice(0, 8), remote: sampleRemote };
+    const { writes, vault } = recordingVault("");
+    const outcome = yield* withStubs(Pair.reconcile(pair, datedConfig, now), {
+      vault,
+      fetcher: {
+        fetchHttp: () =>
+          Effect.succeed({ html: "<p>x</p>", method: "http", finalUrl: sampleRemote.href }),
+      },
+      extractor: {
+        extract: () => Effect.succeed({ cleanHtml: "<p>x</p>", metadata: { wordCount: 500 } }),
+      },
+    });
+    expect(outcome._tag).toBe("Created");
+    expect(writes).toEqual(["2026/01/example-article-5d41402a.md"]);
+  }),
+);
+
+it.effect("Retry writes to the existing note even after a Pinboard title change", () =>
+  Effect.gen(function* () {
+    const failingFm: Frontmatter = {
+      ...baseFrontmatter,
+      pinmark_fetch_status: "failed",
+      pinmark_fetch_attempts: 1,
+      pinmark_fetch_error_kind: "timeout",
+      pinmark_fetch_error_message: "previous failure",
+    };
+    const content = yield* sampleLocalMarkdown(failingFm, "");
+    const renamed: RemoteBookmark = { ...sampleRemote, description: "A brand new title" };
+    const pair: Pair = {
+      hash: sampleRemote.hash.slice(0, 8),
+      remote: renamed,
+      localFilename: "example-article-5d41402a.md",
+    };
+    const { writes, vault } = recordingVault(content);
+    yield* withStubs(Pair.reconcile(pair, baseConfig, now), {
+      vault,
+      fetcher: {
+        fetchHttp: () =>
+          Effect.succeed({ html: "<p>x</p>", method: "http", finalUrl: sampleRemote.href }),
+      },
+      extractor: {
+        extract: () => Effect.succeed({ cleanHtml: "<p>x</p>", metadata: { wordCount: 500 } }),
+      },
+    });
+    expect(writes).toEqual(["example-article-5d41402a.md"]);
+  }),
+);
+
+it("needsMove / expectedPath follow saved_at in UTC", () => {
+  const lateNewYearsEve: RemoteBookmark = {
+    ...sampleRemote,
+    time: new Date("2025-12-31T23:30:00Z"),
+  };
+  expect(Pair.expectedPath("a-12345678.md", lateNewYearsEve, "{yyyy}/{mm}")).toBe(
+    "2025/12/a-12345678.md",
+  );
+  expect(Pair.needsMove("2025/12/a-12345678.md", lateNewYearsEve, "{yyyy}/{mm}")).toBe(false);
+  expect(Pair.needsMove("a-12345678.md", lateNewYearsEve, "{yyyy}/{mm}")).toBe(true);
+  expect(Pair.needsMove("a-12345678.md", lateNewYearsEve, "")).toBe(false);
+});
+
+// ────────────────────────────────────────────────────────────────────────────────
+// sync command — the early "no Pinboard changes" exit and layout changes.
+// ────────────────────────────────────────────────────────────────────────────────
+
+const runSync = (config: PinmarkConfig, stored: { lastPinboardUpdate: Date; layout?: string }) => {
+  const saved: Array<{ layout?: string }> = [];
+  let fetchedAll = false;
+  const content = sampleLocalMarkdown(baseFrontmatter);
+  const eff = Effect.gen(function* () {
+    const note = yield* content;
+    const withRemoteState = sync({ token: "t", config, dryRun: false }).pipe(
+      Effect.provideService(PinboardClient, {
+        // Pinboard hasn't changed since the stored sync.
+        lastUpdate: () => Effect.succeed({ update_time: stored.lastPinboardUpdate }),
+        allPosts: () =>
+          Effect.sync(() => {
+            fetchedAll = true;
+            return [sampleRemote];
+          }),
+      } as unknown as PinboardClient),
+      Effect.provideService(State, {
+        load: () => Effect.succeed(Option.some({ schemaVersion: 1, ...stored })),
+        save: (_root: string, s: { layout?: string }) =>
+          Effect.sync(() => {
+            saved.push(s);
+          }),
+      } as unknown as State),
+    );
+    return yield* withStubs(withRemoteState, {
+      vault: {
+        listBookmarkFilenames: () => Effect.succeed(["example-article-5d41402a.md"]),
+        readBookmark: () => Effect.succeed(Option.some(note)),
+      },
+    });
+  });
+  return eff.pipe(Effect.map((report) => ({ report, saved, fetchedAll: () => fetchedAll })));
+};
+
+it.effect("skips the sync when neither Pinboard nor the layout changed", () =>
+  Effect.gen(function* () {
+    const { report, saved, fetchedAll } = yield* runSync(datedConfig, {
+      lastPinboardUpdate: now,
+      layout: "{yyyy}/{mm}",
+    });
+    expect(fetchedAll()).toBe(false);
+    expect(report.moved).toBe(0);
+    expect(saved).toEqual([]);
+  }),
+);
+
+it.effect("runs a full pass when the layout changed, and records the new layout", () =>
+  Effect.gen(function* () {
+    // State written before layouts existed: no `layout`, i.e. flat.
+    const { report, saved, fetchedAll } = yield* runSync(datedConfig, { lastPinboardUpdate: now });
+    expect(fetchedAll()).toBe(true);
+    expect(report.moved).toBe(1);
+    expect(saved[0]?.layout).toBe("{yyyy}/{mm}");
+  }),
+);
+
+it.effect("treats state without a layout as flat, so flat vaults aren't re-synced", () =>
+  Effect.gen(function* () {
+    const { fetchedAll } = yield* runSync(baseConfig, { lastPinboardUpdate: now });
+    expect(fetchedAll()).toBe(false);
   }),
 );

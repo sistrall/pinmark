@@ -1,4 +1,4 @@
-import { hashFromFilename } from "../bookmark/filename.js";
+import { basenameOf, hashFromFilename, joinVaultPath, layoutDir } from "../bookmark/filename.js";
 import { pinboardFieldsDiffer } from "../bookmark/frontmatter.js";
 import type { LocalBookmark, RemoteBookmark } from "../bookmark/types.js";
 import type { Pair } from "./index.js";
@@ -76,3 +76,14 @@ export const classifyKind = (
   if (isDrifted(local, remote)) return "Drifted";
   return "Healthy";
 };
+
+// ────────────────────────────────────────────────────────────────────────────────
+// Layout — where a paired note should live. The filename is kept as is (it may
+// predate a Pinboard title change); only the folder follows the layout.
+// ────────────────────────────────────────────────────────────────────────────────
+
+export const expectedPath = (localPath: string, remote: RemoteBookmark, layout: string): string =>
+  joinVaultPath(layoutDir(layout, remote.time), basenameOf(localPath));
+
+export const needsMove = (localPath: string, remote: RemoteBookmark, layout: string): boolean =>
+  expectedPath(localPath, remote, layout) !== localPath;

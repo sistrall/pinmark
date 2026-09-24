@@ -6,6 +6,9 @@
     "vault": {
       "type": "string"
     },
+    "layout": {
+      "type": "string"
+    },
     "fetch": {
       "type": "object",
       "required": [],
@@ -72,10 +75,7 @@
         },
         "format": {
           "type": "string",
-          "enum": [
-            "png",
-            "jpeg"
-          ]
+          "enum": ["png", "jpeg"]
         },
         "jpegQuality": {
           "type": "number"

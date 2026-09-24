@@ -23,6 +23,7 @@ export interface SyncReport {
   readonly recovered: number;
   readonly abandoned: number;
   readonly backfilled: number;
+  readonly moved: number;
   readonly fetchOk: { http: number; headless: number };
   readonly fetchFailed: number;
 }
@@ -45,6 +46,7 @@ const emptyReport = (): SyncReport => ({
   recovered: 0,
   abandoned: 0,
   backfilled: 0,
+  moved: 0,
   fetchOk: { http: 0, headless: 0 },
   fetchFailed: 0,
 });
@@ -86,6 +88,7 @@ const mergeReport = (acc: SyncReport, inc: Partial<SyncReport>): SyncReport => (
   recovered: acc.recovered + (inc.recovered ?? 0),
   abandoned: acc.abandoned + (inc.abandoned ?? 0),
   backfilled: acc.backfilled + (inc.backfilled ?? 0),
+  moved: acc.moved + (inc.moved ?? 0),
   fetchOk: {
     http: acc.fetchOk.http + (inc.fetchOk?.http ?? 0),
     headless: acc.fetchOk.headless + (inc.fetchOk?.headless ?? 0),
@@ -118,10 +121,25 @@ export const sync = (
       onNone: () => undefined,
       onSome: (s) => s.lastPinboardUpdate,
     });
+    // State written before layouts existed has no `layout`: those vaults are flat.
+    const lastLayout = Option.match(stored, {
+      onNone: () => undefined,
+      onSome: (s) => s.layout ?? "",
+    });
+    const layoutChanged = lastLayout !== undefined && lastLayout !== options.config.layout;
     const update = yield* pinboard.lastUpdate(options.token).pipe(toConfigError);
-    if (lastUpdate !== undefined && update.update_time.getTime() <= lastUpdate.getTime()) {
+    if (
+      !layoutChanged &&
+      lastUpdate !== undefined &&
+      update.update_time.getTime() <= lastUpdate.getTime()
+    ) {
       yield* Effect.logInfo("No Pinboard changes since last sync");
       return emptyReport();
+    }
+    if (layoutChanged) {
+      yield* Effect.logInfo(
+        `Layout changed from "${lastLayout}" to "${options.config.layout}"; moving notes`,
+      );
     }
 
     // Gather both sides and pair them up.
@@ -132,9 +150,19 @@ export const sync = (
 
     // Plan log.
     const counts: Record<PairState["_tag"], number> = { Untracked: 0, Paired: 0, Orphaned: 0 };
-    for (const p of pairs) counts[Pair.classify(p)._tag] += 1;
+    let toMove = 0;
+    for (const p of pairs) {
+      counts[Pair.classify(p)._tag] += 1;
+      if (
+        p.remote !== undefined &&
+        p.localFilename !== undefined &&
+        Pair.needsMove(p.localFilename, p.remote, options.config.layout)
+      ) {
+        toMove += 1;
+      }
+    }
     yield* Effect.logInfo(
-      `plan: ${counts.Untracked} untracked, ${counts.Paired} paired, ${counts.Orphaned} orphaned`,
+      `plan: ${counts.Untracked} untracked, ${counts.Paired} paired (${toMove} to move), ${counts.Orphaned} orphaned`,
     );
 
     if (options.dryRun) {
@@ -143,6 +171,7 @@ export const sync = (
         added: counts.Untracked,
         metadataUpdated: counts.Paired,
         deleted: counts.Orphaned,
+        moved: toMove,
       };
     }
 
@@ -151,13 +180,19 @@ export const sync = (
     const outcomes = yield* Pair.sync(pairs, options.config);
 
     yield* state
-      .save(options.config.vault, { lastPinboardUpdate: update.update_time, schemaVersion: 1 })
+      .save(options.config.vault, {
+        lastPinboardUpdate: update.update_time,
+        layout: options.config.layout,
+        schemaVersion: 1,
+      })
       .pipe(toConfigError);
 
-    return outcomes.reduce(
-      (acc, outcome) => mergeReport(acc, reportIncrement(outcome)),
-      emptyReport(),
-    );
+    // Every paired note in the wrong folder is moved before anything else happens
+    // to it, so the plan's count is the number of moves.
+    return outcomes.reduce((acc, outcome) => mergeReport(acc, reportIncrement(outcome)), {
+      ...emptyReport(),
+      moved: toMove,
+    });
   });
 
 // ────────────────────────────────────────────────────────────────────────────────
@@ -189,7 +224,7 @@ export const syncCommand = Command.make(
       yield* Effect.logInfo(
         `sync: ${report.added} new, ${report.metadataUpdated} metadata, ${report.deleted} deleted, ` +
           `${report.retried} retried (${report.recovered} recovered), ` +
-          `${report.backfilled} backfilled; ` +
+          `${report.backfilled} backfilled, ${report.moved} moved; ` +
           `fetch: ${report.fetchOk.http + report.fetchOk.headless} ok (${report.fetchOk.http} http, ${report.fetchOk.headless} headless), ` +
           `${report.fetchFailed} failed, ${report.abandoned} abandoned`,
       );

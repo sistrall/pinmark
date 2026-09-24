@@ -1,7 +1,7 @@
 import { Effect } from "effect";
+import type { RawExtraction } from "../content-worker.js";
 import { ExtractionError } from "../errors.js";
 import { ContentPool, WorkerTimeoutError } from "./content-pool.js";
-import type { RawExtraction } from "../content-worker.js";
 
 export interface ExtractedMetadata {
   readonly pageTitle?: string;

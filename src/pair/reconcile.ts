@@ -1,7 +1,11 @@
 import { Effect, Match, Option, pipe } from "effect";
 import {
+  basenameOf,
   bookmarkFilenameFromHash,
+  dirnameOf,
   domainOf,
+  joinVaultPath,
+  layoutDir,
   matchesAnyDomainSuffix,
   screenshotFilename,
 } from "../bookmark/filename.js";
@@ -32,7 +36,7 @@ import {
 } from "../services/fetcher.js";
 import { Vault } from "../services/vault.js";
 import type { Pair } from "./index.js";
-import { classify, classifyKind } from "./state.js";
+import { classify, classifyKind, expectedPath } from "./state.js";
 import { type ActionPhase, Outcome, type PipelineResult, type ProcessMode } from "./types.js";
 
 // ────────────────────────────────────────────────────────────────────────────────
@@ -54,6 +58,10 @@ interface PairContext {
 
 const filenameFor = (post: RemoteBookmark): string =>
   bookmarkFilenameFromHash(cleanTitle(post.description), post.hash);
+
+// Vault-relative path for a bookmark that has no note yet.
+const newNotePath = (post: RemoteBookmark, config: PinmarkConfig): string =>
+  joinVaultPath(layoutDir(config.layout, post.time), filenameFor(post));
 
 const buildScreenshotOpts = (config: PinmarkConfig): ScreenshotOptions => ({
   viewportWidth: config.screenshot.viewportWidth,
@@ -157,10 +165,12 @@ const writeSuccess = (
 
     let screenshotName: string | undefined;
     if (fetched.screenshot !== undefined) {
-      screenshotName = screenshotFilename(ctx.filename, ctx.config.screenshot.format);
+      // Written next to the note; frontmatter keeps just the name.
+      const screenshotPath = screenshotFilename(ctx.filename, ctx.config.screenshot.format);
       yield* vault
-        .writeScreenshot(ctx.config.vault, screenshotName, fetched.screenshot)
+        .writeScreenshot(ctx.config.vault, screenshotPath, fetched.screenshot)
         .pipe(Effect.orDie);
+      screenshotName = basenameOf(screenshotPath);
     }
 
     const fm = buildAddedFrontmatter(
@@ -305,9 +315,12 @@ const outcomeFromResult = (r: PipelineResult, phase: ActionPhase): Outcome =>
       : Outcome.Failed({ phase });
 
 // Fetch + extract + write a bookmark file (the create/retry pipeline). Errors at
-// any stage land in catchTags and become a failure stub.
+// any stage land in catchTags and become a failure stub. `filename` is the note's
+// vault-relative path: a fresh one on create, the existing one on retry, so a
+// retry never leaves a second note behind after a Pinboard title change.
 const tryCreate = (
   remote: RemoteBookmark,
+  filename: string,
   config: PinmarkConfig,
   now: Date,
   attempts: number,
@@ -315,7 +328,7 @@ const tryCreate = (
 ): Effect.Effect<Outcome, never, Fetcher | Extractor | MarkdownConverter | Vault> => {
   const ctx: PairContext = {
     post: remote,
-    filename: filenameFor(remote),
+    filename,
     now,
     attempts,
     config,
@@ -362,10 +375,11 @@ const captureScreenshot = (
         return Outcome.ScreenshotCaptureFailed();
       }
 
-      const screenshotName = screenshotFilename(local.filename, config.screenshot.format);
+      const screenshotPath = screenshotFilename(local.filename, config.screenshot.format);
       yield* vault
-        .writeScreenshot(config.vault, screenshotName, fetched.screenshot)
+        .writeScreenshot(config.vault, screenshotPath, fetched.screenshot)
         .pipe(Effect.orDie);
+      const screenshotName = basenameOf(screenshotPath);
 
       const updatedFm: Frontmatter = {
         ...refreshPinboardFields(local.frontmatter, remote),
@@ -439,8 +453,38 @@ const loadLocal = (
     });
   });
 
-// For a Paired bookmark: load the local, sub-classify by its frontmatter, and
-// pick the appropriate transition.
+// Move a note, and its screenshot when it has one, into the folder the layout
+// calls for; return the note's new path. The screenshot goes first: if the run
+// is interrupted in between, the note is still misplaced next time and both
+// moves are redone (moving a file that's already gone is a no-op). Notes whose
+// frontmatter doesn't parse still move, so the tree stays tidy.
+const moveToLayout = (
+  filename: string,
+  local: Option.Option<LocalBookmark>,
+  remote: RemoteBookmark,
+  config: PinmarkConfig,
+): Effect.Effect<string, never, Vault> =>
+  Effect.gen(function* () {
+    const target = expectedPath(filename, remote, config.layout);
+    if (target === filename) return filename;
+    const vault = yield* Vault;
+    const screenshot = Option.isSome(local) ? local.value.frontmatter.screenshot : undefined;
+    if (screenshot !== undefined) {
+      yield* vault
+        .moveFile(
+          config.vault,
+          joinVaultPath(dirnameOf(filename), screenshot),
+          joinVaultPath(dirnameOf(target), screenshot),
+        )
+        .pipe(Effect.orDie);
+    }
+    yield* vault.moveFile(config.vault, filename, target).pipe(Effect.orDie);
+    yield* Effect.logInfo(`move — ${filename} → ${target}`);
+    return target;
+  });
+
+// For a Paired bookmark: load the local, move it into its layout folder if
+// needed, sub-classify by its frontmatter, and pick the appropriate transition.
 const reconcilePaired = (
   remote: RemoteBookmark,
   filename: string,
@@ -449,8 +493,9 @@ const reconcilePaired = (
 ): Effect.Effect<Outcome, never, Fetcher | Extractor | MarkdownConverter | Vault> =>
   Effect.gen(function* () {
     const localOpt = yield* loadLocal(filename, config);
+    const notePath = yield* moveToLayout(filename, localOpt, remote, config);
     if (Option.isNone(localOpt)) return Outcome.Skipped();
-    const local = localOpt.value;
+    const local: LocalBookmark = { ...localOpt.value, filename: notePath };
 
     const kind = classifyKind(
       local,
@@ -461,7 +506,14 @@ const reconcilePaired = (
 
     return yield* Match.value(kind).pipe(
       Match.when("Failing", () =>
-        tryCreate(remote, config, now, local.frontmatter.pinmark_fetch_attempts + 1, "retry"),
+        tryCreate(
+          remote,
+          local.filename,
+          config,
+          now,
+          local.frontmatter.pinmark_fetch_attempts + 1,
+          "retry",
+        ),
       ),
       Match.when("MissingScreenshot", () => captureScreenshot(remote, local, config)),
       Match.when("Drifted", () => refreshMetadata(remote, local, config)),
@@ -479,7 +531,9 @@ export const reconcile = (
   now: Date,
 ): Effect.Effect<Outcome, never, Fetcher | Extractor | MarkdownConverter | Vault> =>
   Match.value(classify(pair)).pipe(
-    Match.tag("Untracked", ({ remote }) => tryCreate(remote, config, now, 1, "create")),
+    Match.tag("Untracked", ({ remote }) =>
+      tryCreate(remote, newNotePath(remote, config), config, now, 1, "create"),
+    ),
     Match.tag("Paired", ({ remote, localFilename }) =>
       reconcilePaired(remote, localFilename, config, now),
     ),
