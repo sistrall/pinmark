@@ -6,7 +6,7 @@ export default defineConfig({
     index: "src/index.ts",
     // Loaded by path from the content pool, so it must be its own file next to
     // the other chunks.
-    "content-worker": "src/services/content-worker.ts",
+    "content-worker": "src/content-worker.ts",
   },
   format: ["esm"],
   target: "node20",

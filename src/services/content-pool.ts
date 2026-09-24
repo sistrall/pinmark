@@ -1,12 +1,12 @@
 import { availableParallelism } from "node:os";
 import { Worker } from "node:worker_threads";
 import { Effect } from "effect";
-import type { ContentJob, ContentReply } from "./content-worker.js";
+import type { ContentJob, ContentReply } from "../content-worker.js";
 
-// Next to this module in both layouts: src/services/content-worker.ts when running
-// from source (dev, tests), dist/content-worker.mjs once bundled.
+// The worker is its own entry point: src/content-worker.ts when running from
+// source (dev, tests), dist/content-worker.mjs next to the bundled chunks.
 const WORKER_URL = new URL(
-  import.meta.url.endsWith(".ts") ? "./content-worker.ts" : "./content-worker.mjs",
+  import.meta.url.endsWith(".ts") ? "../content-worker.ts" : "./content-worker.mjs",
   import.meta.url,
 );
 

@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { makeContentPool, WorkerTimeoutError } from "./content-pool.js";
-import type { RawExtraction } from "./content-worker.js";
+import type { RawExtraction } from "../content-worker.js";
 
 const ARTICLE = `<html><head><title>Test article</title></head><body><article>
 <h1>Test article</h1>
