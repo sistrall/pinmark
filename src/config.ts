@@ -7,6 +7,9 @@ export const FetchConfig = Schema.Struct({
   concurrency: Schema.optionalWith(Schema.Number, { default: () => 4 }),
   perHostConcurrency: Schema.optionalWith(Schema.Number, { default: () => 1 }),
   timeoutMs: Schema.optionalWith(Schema.Number, { default: () => 30_000 }),
+  // Responses larger than this are abandoned instead of parsed. Parsing cost grows
+  // superlinearly with size, so a multi-MB body can stall extraction for hours.
+  maxBodyBytes: Schema.optionalWith(Schema.Number, { default: () => 5_000_000 }),
   userAgent: Schema.optionalWith(Schema.String, {
     default: () => `pinmark/${PINMARK_VERSION} (+https://github.com/sistrall/pinmark)`,
   }),
@@ -14,6 +17,9 @@ export const FetchConfig = Schema.Struct({
 
 export const ExtractionConfig = Schema.Struct({
   minWordCount: Schema.optionalWith(Schema.Number, { default: () => 100 }),
+  // Hard cap on HTML → article → markdown work for one bookmark. Extraction runs in
+  // a worker thread that is terminated when this elapses.
+  timeoutMs: Schema.optionalWith(Schema.Number, { default: () => 30_000 }),
   headlessAllowlist: Schema.optionalWith(Schema.Array(Schema.String), {
     default: () => [] as readonly string[],
   }),

@@ -4,7 +4,7 @@ import { expect } from "vitest";
 import { composeBookmarkFile } from "../bookmark/markdown.js";
 import type { RemoteBookmark } from "../bookmark/types.js";
 import type { PinmarkConfig } from "../config.js";
-import { FetchError } from "../errors.js";
+import { ExtractionError, FetchError } from "../errors.js";
 import { type Outcome, Pair } from "../pair/index.js";
 import type { Frontmatter } from "../schemas/frontmatter.js";
 import { MarkdownConverter } from "../services/converter.js";
@@ -22,9 +22,10 @@ const baseConfig: PinmarkConfig = {
     concurrency: 1,
     perHostConcurrency: 1,
     timeoutMs: 30_000,
+    maxBodyBytes: 5_000_000,
     userAgent: "pinmark-test/1.0",
   },
-  extraction: { minWordCount: 100, headlessAllowlist: [] },
+  extraction: { minWordCount: 100, timeoutMs: 30_000, headlessAllowlist: [] },
   retry: { maxAttempts: 5, initialDelayMs: 30_000 },
   screenshot: {
     enabled: false,
@@ -74,7 +75,7 @@ const baseFrontmatter: Frontmatter = {
 const die = (name: string) => Effect.die(`stub '${name}' was not configured for this test`);
 
 const defaultFetcher = {
-  fetchHttp: (_url: string, _ua: string, _t: number) => die("fetchHttp"),
+  fetchHttp: (_url: string, _ua: string, _t: number, _max: number) => die("fetchHttp"),
   fetchHeadless: (
     _url: string,
     _ua: string,
@@ -84,7 +85,7 @@ const defaultFetcher = {
 };
 
 const defaultExtractor = {
-  extract: (_html: string, _url: string) => die("extract"),
+  extract: (_html: string, _url: string, _t: number) => die("extract"),
 };
 
 // MarkdownConverter is purely transforming — leave the default usable.
@@ -265,5 +266,94 @@ it.effect("Paired/Failing → Recovered when retry succeeds", () =>
     });
     expect(outcome._tag).toBe("Recovered");
     if (outcome._tag === "Recovered") expect(outcome.method).toBe("http");
+  }),
+);
+
+// Captures the last file written through the vault stub so tests can assert on
+// the frontmatter a failure leaves behind.
+const capturingVault = () => {
+  const written: { content?: string } = {};
+  return {
+    written,
+    vault: {
+      writeBookmark: (_root: string, _filename: string, content: string) =>
+        Effect.sync(() => {
+          written.content = content;
+        }),
+    },
+  };
+};
+
+it.effect("Untracked → Abandoned at once when the URL serves a non-HTML content type", () =>
+  Effect.gen(function* () {
+    const pair: Pair = { hash: sampleRemote.hash.slice(0, 8), remote: sampleRemote };
+    const { written, vault } = capturingVault();
+    const outcome = yield* withStubs(Pair.reconcile(pair, baseConfig, now), {
+      vault,
+      fetcher: {
+        fetchHttp: () =>
+          Effect.fail(
+            new FetchError({
+              kind: "unsupported_content",
+              message: "Unsupported content type: application/pdf",
+              url: sampleRemote.href,
+            }),
+          ),
+      },
+    });
+    expect(outcome._tag).toBe("Abandoned");
+    expect(written.content).toContain("pinmark_fetch_status: abandoned");
+    expect(written.content).toContain("pinmark_fetch_attempts: 1");
+    expect(written.content).toContain("pinmark_fetch_error_kind: unsupported_content");
+  }),
+);
+
+it.effect("Untracked → Abandoned without extracting when headless HTML exceeds the size cap", () =>
+  Effect.gen(function* () {
+    const screenshotConfig: PinmarkConfig = {
+      ...baseConfig,
+      fetch: { ...baseConfig.fetch, maxBodyBytes: 10 },
+      screenshot: { ...baseConfig.screenshot, enabled: true },
+    };
+    const pair: Pair = { hash: sampleRemote.hash.slice(0, 8), remote: sampleRemote };
+    const outcome = yield* withStubs(Pair.reconcile(pair, screenshotConfig, now), {
+      fetcher: {
+        fetchHeadless: () =>
+          Effect.succeed({
+            html: "<p>well over ten bytes of html</p>",
+            method: "headless",
+            finalUrl: sampleRemote.href,
+          }),
+      },
+      // defaultExtractor dies if called, which is the assertion.
+    });
+    expect(outcome._tag).toBe("Abandoned");
+  }),
+);
+
+it.effect("Untracked → Failed with kind timeout when extraction times out", () =>
+  Effect.gen(function* () {
+    const pair: Pair = { hash: sampleRemote.hash.slice(0, 8), remote: sampleRemote };
+    const { written, vault } = capturingVault();
+    const outcome = yield* withStubs(Pair.reconcile(pair, baseConfig, now), {
+      vault,
+      fetcher: {
+        fetchHttp: () =>
+          Effect.succeed({ html: "<p>x</p>", method: "http", finalUrl: sampleRemote.href }),
+      },
+      extractor: {
+        extract: () =>
+          Effect.fail(
+            new ExtractionError({
+              message: "Extraction exceeded 30000ms",
+              url: sampleRemote.href,
+              timedOut: true,
+            }),
+          ),
+      },
+    });
+    expect(outcome._tag).toBe("Failed");
+    expect(written.content).toContain("pinmark_fetch_status: failed");
+    expect(written.content).toContain("pinmark_fetch_error_kind: timeout");
   }),
 );

@@ -24,7 +24,12 @@ import {
 import type { Frontmatter } from "../schemas/frontmatter.js";
 import { MarkdownConverter } from "../services/converter.js";
 import { type ExtractedContent, Extractor } from "../services/extractor.js";
-import { Fetcher, type FetchResult, type ScreenshotOptions } from "../services/fetcher.js";
+import {
+  Fetcher,
+  type FetchResult,
+  type ScreenshotOptions,
+  tooLargeError,
+} from "../services/fetcher.js";
 import { Vault } from "../services/vault.js";
 import type { Pair } from "./index.js";
 import { classify, classifyKind } from "./state.js";
@@ -73,19 +78,28 @@ interface FailureDetails {
   readonly message: string;
   readonly httpCode?: number;
   readonly logDetail: string;
+  // Retrying can't help (the URL serves a PDF, the page is too big): abandon now
+  // instead of spending the remaining attempts on it.
+  readonly permanent?: boolean;
 }
+
+const PERMANENT_FETCH_ERRORS: ReadonlySet<FetchErrorKind> = new Set([
+  "unsupported_content",
+  "too_large",
+]);
 
 const failureFromFetch = (err: FetchError): FailureDetails => ({
   kind: err.kind,
   message: err.message,
   ...(err.httpCode !== undefined ? { httpCode: err.httpCode } : {}),
   logDetail: `${err.kind}${err.httpCode !== undefined ? ` ${err.httpCode}` : ""}`,
+  ...(PERMANENT_FETCH_ERRORS.has(err.kind) ? { permanent: true } : {}),
 });
 
 const failureFromExtraction = (err: ExtractionError): FailureDetails => ({
-  kind: "no_content",
+  kind: err.timedOut ? "timeout" : "no_content",
   message: err.message,
-  logDetail: "extraction",
+  logDetail: err.timedOut ? "extraction timeout" : "extraction",
 });
 
 const failureFromInsufficientContent = (err: InsufficientContentError): FailureDetails => ({
@@ -105,7 +119,7 @@ const writeFailure = (
   Effect.gen(function* () {
     const vault = yield* Vault;
     const maxAttempts = ctx.config.retry.maxAttempts;
-    const isAbandoned = ctx.attempts >= maxAttempts;
+    const isAbandoned = details.permanent === true || ctx.attempts >= maxAttempts;
     const fm = buildFailedFrontmatter(
       ctx.post,
       ctx.now,
@@ -114,6 +128,7 @@ const writeFailure = (
       details.httpCode,
       ctx.attempts,
       maxAttempts,
+      details.permanent,
     );
     const file = yield* composeBookmarkFile(fm, "").pipe(Effect.orDie);
     yield* vault.writeBookmark(ctx.config.vault, ctx.filename, file).pipe(Effect.orDie);
@@ -127,10 +142,18 @@ const writeSuccess = (
   ctx: PairContext,
   fetched: FetchResult,
   extracted: ExtractedContent,
-): Effect.Effect<PipelineResult, never, MarkdownConverter | Vault> =>
+): Effect.Effect<PipelineResult, ExtractionError, MarkdownConverter | Vault> =>
   Effect.gen(function* () {
     const converter = yield* MarkdownConverter;
     const vault = yield* Vault;
+
+    // Convert before writing anything, so a conversion failure can't leave an
+    // orphaned screenshot next to a failure stub.
+    const body = yield* converter.convert(
+      extracted.cleanHtml,
+      ctx.post.href,
+      ctx.config.extraction.timeoutMs,
+    );
 
     let screenshotName: string | undefined;
     if (fetched.screenshot !== undefined) {
@@ -140,7 +163,6 @@ const writeSuccess = (
         .pipe(Effect.orDie);
     }
 
-    const body = yield* converter.convert(extracted.cleanHtml);
     const fm = buildAddedFrontmatter(
       ctx.post,
       fetched,
@@ -171,7 +193,12 @@ const initialFetch = (
   Effect.gen(function* () {
     const fetcher = yield* Fetcher;
     return yield* mode === "http-first"
-      ? fetcher.fetchHttp(post.href, config.fetch.userAgent, config.fetch.timeoutMs)
+      ? fetcher.fetchHttp(
+          post.href,
+          config.fetch.userAgent,
+          config.fetch.timeoutMs,
+          config.fetch.maxBodyBytes,
+        )
       : fetcher.fetchHeadless(
           post.href,
           config.fetch.userAgent,
@@ -180,17 +207,23 @@ const initialFetch = (
         );
   });
 
+// Headless results aren't size-capped while downloading, so the cap is enforced
+// here too, right before the expensive part.
 const extractContent = (
   fetched: FetchResult,
   url: string,
+  config: PinmarkConfig,
 ): Effect.Effect<
   { fetched: FetchResult; extracted: ExtractedContent },
-  ExtractionError,
+  ExtractionError | FetchError,
   Extractor
 > =>
   Effect.gen(function* () {
+    if (Buffer.byteLength(fetched.html) > config.fetch.maxBodyBytes) {
+      return yield* Effect.fail(tooLargeError(url, config.fetch.maxBodyBytes));
+    }
     const extractor = yield* Extractor;
-    const extracted = yield* extractor.extract(fetched.html, url);
+    const extracted = yield* extractor.extract(fetched.html, url, config.extraction.timeoutMs);
     return { fetched, extracted };
   });
 
@@ -242,7 +275,7 @@ const finalizeWithEscalation = (
     const fetcher = yield* Fetcher;
     return yield* pipe(
       fetcher.fetchHeadless(post.href, config.fetch.userAgent, config.fetch.timeoutMs),
-      Effect.flatMap((headless) => extractContent(headless, post.href)),
+      Effect.flatMap((headless) => extractContent(headless, post.href, config)),
       Effect.flatMap(({ fetched, extracted }) =>
         (extracted.metadata.wordCount ?? 0) >= config.extraction.minWordCount
           ? Effect.succeed({ fetched, extracted })
@@ -291,7 +324,7 @@ const tryCreate = (
   const mode = modeFor(remote.href, config);
   return pipe(
     initialFetch(mode, remote, config),
-    Effect.flatMap((fetched) => extractContent(fetched, remote.href)),
+    Effect.flatMap((fetched) => extractContent(fetched, remote.href, config)),
     Effect.flatMap(({ fetched, extracted }) =>
       mode === "http-first"
         ? finalizeWithEscalation(remote, config, fetched, extracted)

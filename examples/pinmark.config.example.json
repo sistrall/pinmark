@@ -5,10 +5,12 @@
     "concurrency": 4,
     "perHostConcurrency": 1,
     "timeoutMs": 30000,
+    "maxBodyBytes": 5000000,
     "userAgent": "pinmark/0.1 (+https://github.com/youruser/pinmark)"
   },
   "extraction": {
     "minWordCount": 100,
+    "timeoutMs": 30000,
     "headlessAllowlist": ["twitter.com", "x.com", "medium.com", "linear.app"]
   },
   "retry": {

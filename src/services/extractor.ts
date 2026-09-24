@@ -1,33 +1,7 @@
-import type { DefuddleResponse } from "defuddle/full";
-import { Defuddle } from "defuddle/node";
 import { Effect } from "effect";
-import { JSDOM, VirtualConsole } from "jsdom";
 import { ExtractionError } from "../errors.js";
-
-const SILENCED_CONSOLE_ERROR_PREFIXES = ["Defuddle: Error parsing schema.org data:"];
-
-let consoleFilterInstalled = false;
-const installConsoleFilter = (): void => {
-  if (consoleFilterInstalled) return;
-  consoleFilterInstalled = true;
-  const original = console.error;
-  console.error = (...args: unknown[]): void => {
-    const first = args[0];
-    if (
-      typeof first === "string" &&
-      SILENCED_CONSOLE_ERROR_PREFIXES.some((p) => first.startsWith(p))
-    ) {
-      return;
-    }
-    original.apply(console, args);
-  };
-};
-
-const makeSilentVirtualConsole = (): VirtualConsole => {
-  const vc = new VirtualConsole();
-  vc.on("jsdomError", () => {});
-  return vc;
-};
+import { ContentPool, WorkerTimeoutError } from "./content-pool.js";
+import type { RawExtraction } from "../content-worker.js";
 
 export interface ExtractedMetadata {
   readonly pageTitle?: string;
@@ -62,7 +36,7 @@ const parsedDate = (value: unknown): Date | undefined => {
 const opt = <K extends string, V>(key: K, value: V | undefined): Partial<Record<K, V>> =>
   value === undefined ? ({} as Partial<Record<K, V>>) : ({ [key]: value } as Partial<Record<K, V>>);
 
-const mapDefuddleResult = (result: DefuddleResponse): ExtractedContent => {
+const mapDefuddleResult = (result: RawExtraction): ExtractedContent => {
   const wordCount =
     typeof result.wordCount === "number" && result.wordCount > 0 ? result.wordCount : undefined;
   return {
@@ -86,22 +60,28 @@ const mapDefuddleResult = (result: DefuddleResponse): ExtractedContent => {
 
 export class Extractor extends Effect.Service<Extractor>()("Extractor", {
   effect: Effect.gen(function* () {
-    installConsoleFilter();
+    const pool = yield* ContentPool;
 
-    const extract = (html: string, url: string): Effect.Effect<ExtractedContent, ExtractionError> =>
-      Effect.tryPromise({
-        try: async () => {
-          const dom = new JSDOM(html, { url, virtualConsole: makeSilentVirtualConsole() });
-          const result = await Defuddle(dom.window.document, url, {});
-          return mapDefuddleResult(result);
-        },
-        catch: (cause) =>
-          new ExtractionError({
-            message: `Defuddle extraction failed: ${String(cause)}`,
-            url,
-            cause,
-          }),
-      });
+    const extract = (
+      html: string,
+      url: string,
+      timeoutMs: number,
+    ): Effect.Effect<ExtractedContent, ExtractionError> =>
+      pool.run({ op: "extract", html, url }, timeoutMs).pipe(
+        Effect.map((raw) => mapDefuddleResult(raw as RawExtraction)),
+        Effect.mapError(
+          (cause) =>
+            new ExtractionError({
+              message:
+                cause instanceof WorkerTimeoutError
+                  ? `Extraction exceeded ${timeoutMs}ms`
+                  : `Defuddle extraction failed: ${cause.message}`,
+              url,
+              ...(cause instanceof WorkerTimeoutError ? { timedOut: true } : {}),
+              cause,
+            }),
+        ),
+      );
 
     return { extract } as const;
   }),

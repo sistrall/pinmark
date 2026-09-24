@@ -1,5 +1,5 @@
 import { HttpClient, HttpClientRequest } from "@effect/platform";
-import { Duration, Effect } from "effect";
+import { Duration, Effect, Stream } from "effect";
 import { type Browser, chromium } from "playwright-core";
 import { FetchError } from "../errors.js";
 
@@ -71,6 +71,24 @@ body {
 }
 `.trim();
 
+// Content types worth handing to the HTML extractor. Anything else (PDFs, images,
+// video, archives) would be decoded as text and parsed as HTML, which produces
+// garbage at best and can stall extraction for hours at worst. A missing header
+// is allowed through; the size cap and extraction timeout still apply.
+const EXTRACTABLE_CONTENT_TYPE = /^(text\/[\w.+-]+|application\/xhtml\+xml)\s*(;|$)/i;
+
+export const isExtractableContentType = (contentType: string | undefined): boolean =>
+  contentType === undefined ||
+  contentType.trim() === "" ||
+  EXTRACTABLE_CONTENT_TYPE.test(contentType.trim());
+
+export const tooLargeError = (url: string, maxBodyBytes: number): FetchError =>
+  new FetchError({
+    kind: "too_large",
+    message: `Response body exceeds ${maxBodyBytes} bytes`,
+    url,
+  });
+
 const mapPlaywrightError = (url: string, cause: unknown): FetchError => {
   const err = cause as { name?: string; message?: string };
   const message = err.message ?? String(cause);
@@ -108,6 +126,7 @@ export class Fetcher extends Effect.Service<Fetcher>()("Fetcher", {
       url: string,
       userAgent: string,
       timeoutMs: number,
+      maxBodyBytes: number,
     ): Effect.Effect<FetchResult, FetchError> =>
       Effect.gen(function* () {
         const req = HttpClientRequest.get(url).pipe(
@@ -143,7 +162,38 @@ export class Fetcher extends Effect.Service<Fetcher>()("Fetcher", {
             }),
           );
         }
-        const body = yield* res.text.pipe(
+        const contentType = res.headers["content-type"];
+        if (!isExtractableContentType(contentType)) {
+          return yield* Effect.fail(
+            new FetchError({
+              kind: "unsupported_content",
+              message: `Unsupported content type: ${contentType}`,
+              url,
+            }),
+          );
+        }
+        const declaredLength = Number(res.headers["content-length"]);
+        if (Number.isFinite(declaredLength) && declaredLength > maxBodyBytes) {
+          return yield* Effect.fail(tooLargeError(url, maxBodyBytes));
+        }
+        // Stream the body so an oversized response without a Content-Length is cut
+        // off at the cap instead of being buffered in full.
+        const body = yield* res.stream.pipe(
+          Stream.mapError(
+            (cause) =>
+              new FetchError({
+                kind: "http_error",
+                message: `Failed to read response body: ${String(cause)}`,
+                url,
+              }),
+          ),
+          Stream.runFoldEffect({ chunks: [] as Uint8Array[], size: 0 }, (acc, chunk) => {
+            const size = acc.size + chunk.length;
+            if (size > maxBodyBytes) return Effect.fail(tooLargeError(url, maxBodyBytes));
+            acc.chunks.push(chunk);
+            return Effect.succeed({ chunks: acc.chunks, size });
+          }),
+          Effect.map(({ chunks }) => new TextDecoder().decode(Buffer.concat(chunks))),
           Effect.timeoutFail({
             duration: Duration.millis(timeoutMs),
             onTimeout: () =>
@@ -153,15 +203,6 @@ export class Fetcher extends Effect.Service<Fetcher>()("Fetcher", {
                 url,
               }),
           }),
-          Effect.mapError((cause) =>
-            cause instanceof FetchError
-              ? cause
-              : new FetchError({
-                  kind: "http_error",
-                  message: `Failed to read response body: ${String(cause)}`,
-                  url,
-                }),
-          ),
         );
         return { html: body, method: "http" as const, finalUrl: url };
       });

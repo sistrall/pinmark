@@ -22,7 +22,9 @@ export type FetchErrorKind =
   | "no_content"
   | "paywall"
   | "captcha"
-  | "redirect_loop";
+  | "redirect_loop"
+  | "unsupported_content"
+  | "too_large";
 
 export class FetchError extends Data.TaggedError("FetchError")<{
   readonly kind: FetchErrorKind;
@@ -34,6 +36,8 @@ export class FetchError extends Data.TaggedError("FetchError")<{
 export class ExtractionError extends Data.TaggedError("ExtractionError")<{
   readonly message: string;
   readonly url: string;
+  // Set when extraction was killed for exceeding `extraction.timeoutMs`.
+  readonly timedOut?: boolean;
   readonly cause?: unknown;
 }> {}
 
